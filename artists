@@ -1,0 +1,102 @@
+#!/usr/bin/perl
+#
+# artists.pl, Create an "Artists" directory from a collection of MP3 Files
+# 
+# Copyright (C) 2000 Jonathan J. Miner
+# 
+# This program is free software;  you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# $Id: artists.pl,v 1.4 2000/04/25 14:04:32 miner Exp $
+# Jonathan J. Miner <miner@doit.wisc.edu>
+#
+
+use Getopt::Std;
+
+$artist_location = "/mpeg3/Artists";
+$artist_depth = 2;
+
+
+$maj_ver = 0;
+$min_ver = 1;
+($revision = '$Revision: 1.4 $') =~ s/\D+(\d+\.\d+)\D+/$1/;
+($rcsfile = '$RCSfile: artists.pl,v $') =~ s/\$[^:]+: ([^\$]+),v \$/$1/;
+
+getopts('hHv');
+
+if ($opt_v) {
+    print STDERR "$rcsfile $maj_ver.$min_ver ($revision)\n";
+    exit;
+}
+
+&usage() if ($opt_h || $opt_H);
+
+$groupid  = getgrnam($groupname);
+
+(my $root = `pwd`) =~ s/\n//;
+&recurse($root, 0);
+
+sub recurse {
+    my $root = shift;
+    my $depth = shift;
+    my $entry;
+    my $dirname;
+    my $target;
+    my @entries;
+
+    if ($depth == $artist_depth) {
+        $target = $root;
+
+        ($dirname) = $target =~ /.*\/([^\/]*)/g;
+
+        $newfile = "$artist_location/$dirname";
+
+        print "linking $target to $newfile\n";
+
+        if (-e $newfile ) {
+            print STDERR "Error: $newfile already exists.  Link not created.\n"
+                if (! $opt_i);
+            next;
+        }
+
+        symlink ($target, $newfile) || 
+            print STDERR "Error: symlink ($target, $newfile) - $!\n";
+    } else {
+
+        opendir(DIR,".");
+        @entries = readdir(DIR);
+        closedir(DIR);
+
+
+        foreach $entry (@entries) {
+            next if ($entry =~ /^\.\.?$/);
+            next if (defined(readlink($entry)));
+            if (-d $entry) {
+                chdir($entry);
+                &recurse("$root/$entry", $depth + 1);
+                chdir("$root");
+            }
+        }
+    }
+}
+
+sub usage{
+    $msg = shift;
+    print STDERR "Error: $msg\n\n" if (defined($msg));
+
+    print STDERR ( "Usage: $0\n",
+                   "       Creates symlinks in $artist_location for every \"Artist\"\n",
+                   "       Directory below our current location.\n",
+                   "       Directory Structure is Assumed to be:\n",
+                   "        ./mountpoint(s)/Artist Directories/Album Directories\n") ;
+
+    exit(-1) if (defined($msg));
+    exit(0);
+}

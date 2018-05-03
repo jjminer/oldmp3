@@ -1,0 +1,316 @@
+#!/usr/bin/perl
+#
+# genre.pl, Create symlinks to directories according to a set standard.
+# 
+# Copyright (C) 2000 Jonathan J. Miner
+# 
+# This program is free software; # you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# $Id: genre.pl,v 1.23 2000/12/18 04:35:50 miner Exp $
+# Jonathan J. Miner <miner@doit.wisc.edu>
+#
+# $locationfile (five lines dawn) should be set to the location where you will
+#               keep a colon-delimited list of genre-name:/file/system/location
+# $genreroot should be set to the root of the genre location
+
+use Getopt::Std;
+use MP3::ID3v1Tag;
+
+$locationfile = "/home/miner/perl/mp3/genre/genre.conf";
+$genreroot = "mpeg3/Genre";
+$groupname = "mpeg3";
+$editor = "/usr/bin/vim";
+
+$maj_ver = 0;
+$min_ver = 3;
+($revision = '$Revision: 1.23 $') =~ s/\D+(\d+\.\d+)\D+/$1/;
+($rcsfile = '$RCSfile: genre.pl,v $') =~ s/\$[^:]+: ([^\$]+),v \$/$1/;
+open (LOCATIONS, "<$locationfile") || &usage("Genre File $locationfile - $!");
+
+while( <LOCATIONS> ) {
+    s/\n//;
+    s/^\s*//;
+    next if (/^#/);
+    next if (/^$/);
+    /^([^:]*):\s*(.*)$/;
+    ($genre = $1) =~ tr/A-Z/a-z/;
+    $path = $2;
+    $location{$genre} = $path;
+}
+
+close (LOCATIONS);
+
+getopts('eahHilrvs');
+
+&usage() if ($opt_h || $opt_H);
+
+if ($opt_v) {
+    &version();
+    exit;
+}
+
+$groupid  = getgrnam($groupname);
+
+if ($opt_a || $opt_r || $opt_e || $opt_s || ($#ARGV > -1)) {
+
+    if ($opt_e) {
+
+        while ($dir = shift) {
+            $dir =~ s#/$##;
+
+            &usage("Directory $dir does not exist.") if (! -d $dir);
+
+            $editor = $ENV{'EDITOR'} if (defined $ENV{'EDITOR'});
+
+            system($editor, "$dir/.genre");
+
+            &clean_dups($dir)
+        }
+
+    } elsif ($opt_s) {
+
+        (my $pwd = `pwd`) =~ s#^/|\n##g;
+        my @root = split /\//, $pwd;
+
+        &recursegenre(\@root);
+    } elsif ( ($#ARGV < 1) || $opt_l ) {
+
+        foreach $dir (@ARGV) {
+            
+            @genres = ();
+
+            $dir =~ s/\/$//;
+            &usage("Directory $dir does not exist.") if (! -d $dir);
+
+            print "$dir : ";
+
+            if (-e "$dir/.genre") {
+                open( IN, "<$dir/.genre");
+                while (<IN>) {
+                    s/\n//;
+                    push @genres, $location{$_};
+                }
+                close(IN);
+
+                print join(', ', @genres), "\n";
+            } else {
+                print "none\n";
+            }
+        }
+
+    } else {
+        $genre = shift;
+
+        while ($dir = shift) {
+            addgenre($genre, $dir);
+        }
+
+    } 
+
+} else {
+    (my $pwd = `pwd`) =~ s#^/|\n##g;
+    my @root = split /\//, $pwd;
+
+    &recurselink(\@root);
+}
+
+sub addgenre {
+    my $genre = shift;
+    my $dir = shift;
+    
+    $dir =~ s#/$##;
+
+    &usage("$dir does not exist.") if (! -d $dir);
+
+    return if (! defined($location{$genre}));
+    print ("Unknown Genre: $genre ($dir).\n") if (! defined($location{$genre}));
+
+    if ($opt_r) {
+        open( OUT, ">$dir/.genre") || &usage("$dir - $!");
+        print "Replacing ";
+    } else {
+        open( OUT, ">>$dir/.genre") || &usage("$dir - $!");
+        print "Appending ";
+    }
+    print "$dir/.genre: $genre\n";
+
+# print OUT "$genre\n";
+
+    close(OUT);
+
+    chmod( 0775, "$dir/.genre");
+    chown($<,$groupid,"$dir/.genre");
+
+    &clean_dups($dir);
+}
+
+sub recurselink {
+    my @root = @{+shift};
+    my $entry;
+    my $dirname;
+    my $target;
+    my @entries;
+    my @genres;
+
+    print "recurse_link [", join( "][", @root), "]\n";
+
+    if (-e ".genre") {
+
+        print ".genre!\n";
+        @genres = ();
+        open (GENRE,"<.genre");
+        while (<GENRE>) {
+            s/\n//;
+            tr/A-Z/a-z/;
+            push @genres, $_;
+        }
+        close(GENRE);
+
+        $target = '/'.join ('/', @root);
+
+        foreach $genre ( @genres ) {
+            if (! defined($location{$genre})) {
+                print STDERR "Error: genre \"$genre\" unknown.\n";
+                next;
+            }
+
+            ($dirname) = $target =~ /.*\/([^\/]*)/g;
+
+            $newfile = "$genreroot/$location{$genre}/$dirname";
+
+            print "linking $target to $newfile ($genre)\n";
+
+            if (-e $newfile ) {
+                print STDERR "Error: $newfile already exists.  Link not created.\n"
+                    if (! $opt_i);
+                next;
+            }
+
+            if (! -e "$genreroot/$location{$genre}") {
+                mkdir("$genreroot/$location{$genre}", 0775);
+                chmod( 0775, "$genreroot/$location{$genre}");
+                chown($<,$groupid,"$genreroot/$location{$genre}");
+            }
+
+            symlink ($target, $newfile) || 
+                print STDERR "Error: symlink ($target, $newfile) - $!\n";
+        }
+    }
+
+    opendir(DIR,".");
+    @entries = readdir(DIR);
+    closedir(DIR);
+
+
+    foreach $entry (@entries) {
+        next if ($entry =~ /^\.\.?$/);
+        next if (defined(readlink($entry)));
+        if (-d $entry) {
+            chdir($entry);
+            &recurselink([@root, $entry]);
+            chdir("..");
+        }
+    }
+}
+
+sub clean_dups{
+    my %entries;
+    my $key;
+    my $dir = shift;
+    open( IN, "<$dir/.genre") || &usage("$dir - $!");
+    $entries{$_} = 1 while (($_ = <IN>) =~ s/\n//);
+    close( IN );
+
+    open( OUT, ">$dir/.genre") || &usage("$dir - $!");
+    foreach $key (sort keys %entries) {
+        if (defined($location{$key})) {
+            print OUT "$key\n";
+        } else {
+            print STDERR "Error: genre \"$key\" unknown.\n"
+        }
+    }
+    close( OUT );
+}
+
+sub recursegenre {
+    my @root = @{+shift};
+    my @entries;
+    my @genres;
+
+    opendir(DIR,".");
+    @entries = readdir(DIR);
+    closedir(DIR);
+
+
+    foreach $entry (@entries) {
+        next if ($entry =~ /^\.\.?$/);
+        next if (defined(readlink($entry)));
+        if (-d $entry) {
+            chdir($entry);
+            &recursegenre([@root, $entry]);
+            chdir("..");
+        }
+        if ($entry =~ /\.mp3$/) {
+            my $mp3 = new MP3::ID3v1Tag($entry);
+            next if (! defined($mp3));
+            next if (! $mp3->got_tag());
+            my $addgenre = lc($mp3->get_genre());
+            my $dir = "/".join ('/', @root[0..$#root-1]);
+
+            &addgenre($addgenre, $dir);
+        }
+    }
+}
+
+sub usage{
+    $msg = shift;
+    print STDERR "Error: $msg\n\n" if (defined($msg));
+
+    &version();
+    print STDERR << "END_USAGE";
+
+ Building Genre Directory Structure:
+   $0 [-i]
+       -i  Ignore errors for existing symlinks (die silently).
+
+   Recurses directories looking for .genre files and links the directories to
+   the proper Genre locations.  .genre files consist of a series of genres,
+   one-per-line that the artist belongs in.
+
+ Displaying Genres
+   $0 [-l directories] or [directory]
+
+   Lists the genres associated with the named directories or directory
+   Hint: genre -l * to list all genres in first-level directories
+
+ Editing Genres
+   $0 [-e] [-r genre] [-a genre] directory(s)
+       -e  Open genre file(s) in \$EDITOR or $editor
+       -r genre  Replace genre for directory(s)
+       -a genre  Append genre to directory(s) [default]
+
+All Genres must be listed in the $locationfile to be used.
+
+END_USAGE
+                  
+    @list = sort keys %location;
+   
+    if ($#list >= 0) {
+        print "Available Genres: @list\n";
+    }
+
+    exit(-1) if (defined($msg));
+    exit(0);
+}
+
+sub version{
+    print STDERR "$rcsfile $maj_ver.$min_ver ($revision)\n";
+}
